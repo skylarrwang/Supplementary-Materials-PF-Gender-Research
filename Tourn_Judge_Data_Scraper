@@ -1,0 +1,1269 @@
+##libraries for parsing data
+import pandas as pd
+import re
+import os
+import pickle
+import csv
+import glob
+import ast
+
+##webscraping libraries 
+import bs4
+from bs4 import BeautifulSoup
+
+from urllib.request import urlopen
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.common.by import By
+from selenium.common.exceptions import TimeoutException
+from selenium.webdriver.support.ui import Select
+from selenium.common.exceptions import NoSuchElementException
+from selenium.common.exceptions import StaleElementReferenceException
+from selenium.webdriver.support import expected_conditions
+
+
+##install selenium for webscraping 
+pip install selenium
+pip install webdriver-manager
+GATHER TOURN DATA
+
+##functions for saving files and dictionaries 
+def save_dict(file,location):
+    d = open(location, 'wb')
+    pickle.dump(file, d)
+    
+def open_dict(location):
+    d = open(location, 'rb')
+    loaded_dict = pickle.load(d)
+    return loaded_dict
+
+def save_csv(file,file_name,headers):
+    path = "path_to_folder"+ file_name + ".csv"
+    to_save = open(path, 'w')
+    writer = csv.writer(to_save)
+    writer.writerow(headers)
+    writer.writerows(file)
+    to_save.close()
+    
+def open_csv(location):
+    csv_object = csv.reader(open(location) , delimiter=',')
+    line_count = 0
+    file = []
+    for row in csv_object:
+        if line_count > 0:
+            file.append(row) 
+        line_count +=1
+    return file
+##functions for parsing/formmating text scrapped from tab
+def parse_item(tabby_string):
+    return ' '.join(tabby_string.split())
+
+def get_team_info(entry_soup):
+    header = entry_soup.find("span",class_="twothirds nospace")
+    
+    try:
+        partners = re.split(" & ", parse_item(header.find('h3').text))
+    except:
+        return ""
+    
+    if len(partners) == 1: 
+        p1 = partners[0]
+        p2 = ""
+    else: 
+        p1 = partners[0]
+        p2 = partners[1]
+        
+    school = parse_item(header.find('h6').text)
+    return [school,p1,p2]
+
+def parse_judge(string,rtype):
+    text = parse_item(string)
+    if len(text) == 0:
+        return ""
+    if rtype == "pre":
+        
+        first_last = re.split(", ",text)
+        try: 
+            j = first_last[1] + " " + first_last[0]
+            return j
+        except:
+            return ""
+    
+    if rtype == "elim":
+        judges = re.split(" - ",text)
+        j = ""
+        for judge in judges:
+            first_last = re.split(", ",judge)
+            
+            if len(first_last) == 1: 
+                j_name = first_last[0]
+            
+            else:
+                j_name = first_last[1] + " " + first_last[0]
+    
+            if len(j) > 0:
+                j = j +" - " + j_name
+            else:
+                j = j + j_name
+    return j 
+
+def sort_round(round_name):
+    for char in round_name: 
+        if char.isdigit():
+            return int(char)
+##scraping entry record
+
+def scrape_team_results(table,loc):
+##given an individual tournament table from an entry page, this will scrape the round-by-round results 
+    season_prelims = []
+    season_elims = []
+    i = 1
+    while i < len(table.find_elements(By.TAG_NAME,"tr")):
+        print(i)
+        row = table.find_elements(By.TAG_NAME,"tr")[i]
+        tourn = row.find_elements(By.TAG_NAME,"td")[0]
+        tourn_name = parse_item(tourn.text)
+        tourn_date = parse_item(row.find_elements(By.TAG_NAME,"td")[2].text)
+        table_location = "seasonal_grid_" + loc
+
+        tourn_xpath = '//*[@id="' + table_location + '"]/table/tbody/tr[' + str(i)  + ']/td[1]'
+       
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH,tourn_xpath))).click()
+        element_id = "header_tourney_detail_"+loc
+        wait = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID,element_id)))
+        soup = BeautifulSoup(driver.page_source)
+        tourn_table_id = "tourney_detail_" + loc
+
+        for tourn_row in soup.find('div',id=tourn_table_id).find("tbody").find_all("tr"):
+            cells = tourn_row.find_all("td")
+            rnd = sort_round(parse_item(cells[0].text))
+            if type(rnd) is not int:
+                rtype = "elim"
+                rnd = parse_item(cells[0].text) 
+                jdg = parse_judge(cells[4].text,"elim")
+            else: 
+                rtype = "pre"
+                jdg = parse_judge(cells[4].text,"pre")
+
+            div = parse_item(cells[1].text)
+            side = parse_item(cells[2].text)
+            opp = parse_item(cells[3].text)
+
+            result = parse_item(cells[5].text)
+
+            try:
+                p1_speaks = parse_item(cells[6].text)
+                p2_speaks = parse_item(cells[7].text)
+            except:
+                p1_speaks = ""
+                p2_speaks = ""
+                
+            add = [tourn_name,tourn_date,div,rtype,rnd,side,opp,jdg,result,p1_speaks,p2_speaks]
+                    
+            if rtype == "pre":
+                season_prelims.append(add)
+            if rtype == "elim":
+                season_elims.append(add)
+        i+=1 
+
+    return [season_prelims,season_elims]
+
+def scrape_individual_results(table,loc):
+##does same thing as previous funciton, but for indivdual rather than team 
+    season_prelims =[]
+    season_elims =[]
+
+    i = 1
+    while i < len(table.find_elements(By.TAG_NAME,"tr")):
+        print(i)
+        row = table.find_elements(By.TAG_NAME,"tr")[i]
+        tourn = row.find_elements(By.TAG_NAME,"td")[0]
+        tourn_name = parse_item(tourn.text)
+        tourn_date = parse_item(row.find_elements(By.TAG_NAME,"td")[2].text)
+        table_location = "seasonal_grid_" + loc
+        tourn_xpath = '//*[@id="' + table_location + '"]/table/tbody/tr[' + str(i) + ']/td[1]'
+        WebDriverWait(driver, 20).until(EC.presence_of_element_located((By.XPATH,tourn_xpath))).click()
+        element_id = "header_tourney_detail_"+loc
+        wait = WebDriverWait(driver, 10).until(EC.presence_of_element_located((By.ID,element_id)))
+        soup = BeautifulSoup(driver.page_source)
+        tourn_table_id = "tourney_detail_" + loc
+        
+        for tourn_row in soup.find('div',id=tourn_table_id).find("tbody").find_all("tr"):
+            cells = tourn_row.find_all("td")
+            rnd = sort_round(parse_item(cells[0].text))
+            if type(rnd) is not int:
+                rtype = "elim"
+                rnd = parse_item(cells[0].text) 
+                jdg = parse_judge(cells[4].text,"elim")
+            else: 
+                rtype = "pre"
+                jdg = parse_judge(cells[4].text,"pre")
+    
+                
+            div = parse_item(cells[1].text)
+            side = parse_item(cells[2].text)
+            opp = parse_item(cells[3].text)
+            
+            result = parse_item(cells[5].text)
+            
+            
+            speaks = parse_item(cells[6].text)
+    
+            add = [tourn_name,tourn_date,div,rtype,rnd,side,opp,jdg,result,speaks]
+            if rtype == "pre":
+                season_prelims.append(add)
+            if rtype == "elim":
+                season_elims.append(add)
+        
+        i +=1 
+   
+    return [season_prelims,season_elims]
+
+def get_team_record(link):
+##this function will compile and organize a team's record for current and past seasons 
+    driver.get(link)
+    soup = BeautifulSoup(driver.page_source)
+
+    team_info = get_team_info(soup)
+    
+    if team_info == "":
+        return ""
+
+    table1 = driver.find_element(By.ID,'seasonal_grid_together_this_yr')
+    table2 = driver.find_element(By.ID,'seasonal_grid_together_past')
+    speaker1_current = driver.find_element(By.ID,'seasonal_grid_speaker1_this_yr')
+    speaker1_past = driver.find_element(By.ID,'seasonal_grid_speaker1_past')
+    speaker2_current = driver.find_element(By.ID,'seasonal_grid_speaker2_this_yr')
+    speaker2_past = driver.find_element(By.ID,'seasonal_grid_speaker2_past')
+
+    team_current = scrape_team_results(table1,"together_this_yr") 
+    team_past = scrape_team_results(table2,"together_past")
+    speaker1_current_results = scrape_individual_results(speaker1_current,"speaker1_this_yr")
+    speaker2_current_results = scrape_individual_results(speaker2_current,"speaker2_this_yr")
+    speaker1_past_results = scrape_individual_results(speaker1_past,"speaker1_past")
+    speaker2_past_results = scrape_individual_results(speaker2_past,"speaker2_past")
+    
+    ##speaker1 results 
+    s1 = {"prelims": team_current[0] + team_past[0] + speaker1_current_results[0] + speaker1_past_results[0],"elims": team_current[1] +team_past[1] + speaker1_current_results[1] + speaker1_past_results[1]}
+    
+    ##speaker2 results
+    s2 = {"prelims": team_current[0] + team_past[0] + speaker2_current_results[0] + speaker2_past_results[0],"elims": team_current[1] + team_past[1] + speaker2_current_results[1] + speaker2_past_results[1]}
+    
+    return [team_info[1],s1,team_info[2],s2]
+
+
+
+        
+
+        
+##functions for gathering entry and round results from a touranment
+def get_tourn_entries(entry_page): 
+    ##gathers results for entry from a tournament 
+    
+    ##this dictionary contains all prior entries. That way, if an entry has already been recorded, we don't have 
+    ##to scrape results again 
+    compiled_dict = open_dict("path_to_dict")
+    soup = BeautifulSoup(urlopen(entry_page),'lxml')
+    entries_dict = {}
+    
+    for row in soup.find('table',id = "fieldsort").find("tbody").find_all('tr'):
+        try:
+            partial_link = row.find('a').get('href')
+            entry_link = "https://www.tabroom.com" + partial_link
+            print("entry_code:",entry_link)
+        
+        except:
+            continue
+        
+        entry_code = parse_item(row.find_all('td')[3].text) 
+    
+        team = get_team_info(BeautifulSoup(urlopen(entry_link),'lxml'))
+        if team == "":
+            continue 
+            
+        
+        normd_team = team[1] + " & " + team[2] +" -- " +team[0]
+        reversed_team = team[2] + " & " + team[1] +" -- " +team[0]
+        
+        
+        
+        if normd_team in compiled_dict:
+            entries_dict[entry_code] = compiled_dict[normd_team]
+        elif reversed_team in compiled_dict: 
+            entries_dict[entry_code] = compiled_dict[reversed_team]
+        else: 
+            if get_team_record(entry_link) == "":
+                continue
+            else: 
+                entries_dict[entry_code] = [team[0]] + get_team_record(entry_link)
+                compiled_dict[normd_team] = entries_dict[entry_code]
+                save_dict(compiled_dict,"path_to_dict")
+        
+        
+    return entries_dict
+
+def navigate_to_pf_entries(tourn_home_link): 
+    ##compiles links to results page for each PF division. E.g. "JV","novice",etc
+    division_links = []
+    soup = BeautifulSoup(urlopen(tourn_home_link),'lxml')
+    
+    link = ""
+    for page in soup.find('ul',id="tabnav").find_all('li'):
+        if parse_item(page.find('a').text) == "Entries":
+            link = "https://www.tabroom.com"+ page.find('a').get('href')
+            break
+    if link == "":
+        return "No Entries Page"
+    else:
+        entries_soup = BeautifulSoup(urlopen(link),'lxml')
+        for event in entries_soup.find('div',class_="sidenote").find_all("a"):
+            event_name = parse_item(event.text)
+
+            if "pf" in event_name.lower() or "public forum" in event_name.lower(): 
+                div_link = "https://www.tabroom.com" + event.get('href')
+                division_links.append([event_name,div_link])
+
+        return division_links
+
+def get_round_links(link,div_name):
+    ##returns the links to elim and prelim rounds for each division 
+    
+    prelim_links = []
+    elim_links = []
+    
+    
+    driver.get(link)
+    driver.find_element(By.CLASS_NAME,'chosen-single').click()
+    wait = WebDriverWait(driver, 5).until(EC.visibility_of_element_located((By.CLASS_NAME,"chosen-drop")))
+    el = driver.find_element(By.CLASS_NAME,'chosen-results')
+    
+    for option in el.find_elements(By.TAG_NAME,'li'):
+
+        op_name =option.get_attribute('innerHTML')
+        
+        if op_name == div_name:
+            option.click()
+            soup = BeautifulSoup(driver.page_source)
+            prelim_list = ["round","r1","r2","r3","r4","r5","r6","r7","r8"]
+            
+        
+            current_round =  soup.find_all('a',class_="dkblue full nowrap")
+            round_elements =  soup.find_all('a',class_="blue full nowrap")
+            
+            round_list = current_round + round_elements
+            for el in round_list:
+               
+                rlink = "https://www.tabroom.com" + el.get('href')
+               
+                if "round_results" in rlink:
+            
+                    r_name = parse_item(el.find('span',class_="half padno marno semibold").text)
+                    
+                    prelim = False 
+                    
+                    for x in prelim_list: 
+                        if x in r_name.lower(): 
+                            prelim = True 
+
+                    if prelim: 
+                        prelim_links.append(rlink)
+                    else:
+                        elim_links.append(rlink)
+                
+                    
+            break
+    
+    return [prelim_links,elim_links]
+
+
+def parse_round(round_link):
+    ##formats round result page into a table 
+    soup = BeautifulSoup(urlopen(round_link),'lxml')
+    try:
+        round_name = parse_item(soup.find('a',class_="dkblue full nowrap").find('span',class_="half padno marno semibold").text)
+    except:
+        return
+    table = soup.find('table')
+    
+    cols = []
+    rdata = []
+    for col in table.find('thead').find_all('th'):
+        col_name = parse_item(col.text)
+        cols.append(col_name)
+    for row in table.find('tbody').find_all("tr"):
+        cells = row.find_all('td')
+         
+            
+        
+        t1_code = parse_item(cells[0].find('a').text)
+        t2_code = parse_item(cells[1].find('a').text)
+        
+        if len(t1_code.strip()) == 0:
+            t1_code = None 
+      
+        if len(t2_code.strip()) == 0:
+            t2_code = None 
+      
+           
+        
+        judges = cells[2].find_all('div')
+        if len(judges) == 0: 
+            js = None
+        else:
+            js = ""
+            i = 0 
+            while i < len(judges):
+                if len(js)  == 0:
+                    js = parse_item(judges[i].text)
+                else:
+                    js = js + " & " + parse_item(judges[i].text)
+                i +=1
+    
+        if len(cells) < 4:
+            ballots = ""
+        else:
+            ballots = cells[3].find_all('div')
+    
+            
+        if len(ballots) == 0:
+            t1_count = None
+            t2_count = None
+        else: 
+            i = 0 
+            while i < len(ballots):
+                ballots[i] = parse_item(ballots[i].text)
+                i +=1
+            t1_count = 0
+            t2_count =0
+            for ballot in ballots:
+                if ballot == cols[0]: 
+                    t1_count +=1 
+                if ballot == cols[1]:
+                    t2_count +=1 
+
+        rdata.append([round_name, t1_code,t1_count,t2_code,t2_count,js])
+    return rdata
+
+def get_results_page(soup): 
+    ##allows you to navigate to results page from main tab page 
+    link = ""
+    for page in soup.find('ul',id="tabnav").find_all('li'):
+        if parse_item(page.find('a').text) == "Results":
+            link = "https://www.tabroom.com"+ page.find('a').get('href')
+            return link
+    return link
+        
+def norm_date(date_list):
+    ##a way to normalize dates to compare them numerically. 
+    norm = int(date_list[0])*10000 + int(date_list[1])*100 + int(date_list[2])
+    return norm 
+
+def get_date_list(round_date):
+    date_list = re.split("-",round_date)
+    year = date_list[0]
+    if date_list[1][0] == "0":
+        month = date_list[1].replace("0","")
+    else:
+        month = date_list[1]
+    if date_list[2][0] == "0":
+        day = date_list[2].replace("0","")
+    else:
+        day = date_list[2]
+    return [year,month,day]
+
+
+def get_prior_rounds(rounds_list,tourn_date):
+    ##allows us to determine, based on entry record, the rounds they've debated prior to a given tournament
+    prior_rounds = []
+    for round in rounds_list:
+        if norm_date(get_date_list(round[1])) < tourn_date:
+            prior_rounds.append(round)
+    return prior_rounds
+
+def parse_round_data(link,entries,tourn_date,tourn_name,div_name):
+    ##gathers and parses all data from an indivdual round
+    date_for_csv = tourn_date
+    dl = re.split('/',tourn_date)
+    pdl = [dl[2],dl[0],dl[1]]
+    tourn_date = norm_date(pdl)
+    
+    rdata = parse_round(link)
+    if type(rdata) is not list:
+        return
+        
+    final_data = []
+    for debate in rdata:     
+        if type(debate[1]) is not str or len(debate[1]) == 0 or debate[1] not in entries or type(debate[3]) is not str or len(debate[3]) == 0 or debate[3] not in entries: 
+            t1 = None
+            t1_school = None
+            p11 = None
+            p11_prior_rounds = None
+            p12 = None
+            p12_prior_rounds = None
+            t2 = None
+            t2_school = None
+            p21 = None
+            p21_prior_rounds = None
+            p22 = None
+            p22_prior_rounds = None
+        else:
+            t1 = entries[debate[1]]
+            t1_school = t1[0]
+            p11 = t1[1]
+            p11_prior_rounds = get_prior_rounds(t1[2]["prelims"],tourn_date) + get_prior_rounds(t1[2]["elims"],tourn_date)
+            p12 = t1[3]
+            p12_prior_rounds = get_prior_rounds(t1[4]["prelims"],tourn_date) + get_prior_rounds(t1[4]["elims"],tourn_date)
+            t2 = entries[debate[3]]
+                    #[school,team_info[1],s1,team_info[2],s2]
+            t2_school = t2[0]
+            p21 = t2[1]
+            p21_prior_rounds = get_prior_rounds(t2[2]["prelims"],tourn_date) + get_prior_rounds(t2[2]["elims"],tourn_date)
+            p22 = t2[3]
+            p22_prior_rounds = get_prior_rounds(t2[4]["prelims"],tourn_date) + get_prior_rounds(t2[4]["elims"],tourn_date)
+        add = [tourn_name,
+               date_for_csv,
+               div_name,
+               debate[0],
+               debate[1],
+               t1_school,
+               p11,
+               p11_prior_rounds,
+               p12,
+               p12_prior_rounds,
+               debate[2],
+               debate[3],
+               t2_school,
+               p21,
+               p21_prior_rounds,
+               p22,
+               p22_prior_rounds,
+               debate[4],
+               debate[5]]
+        final_data.append(add)
+    return final_data
+##compiling tourn results##
+def scrape_tourn_results(tourn_link,tourn_date): 
+    soup = BeautifulSoup(urlopen(tourn_link),'lxml')
+    tourn_name = parse_item(soup.find('div',class_="main").find('h2').text)
+    file_name = tourn_name + "_" + tourn_date.replace("/",".") 
+
+    divs = navigate_to_pf_entries(tourn_link)
+    if divs == "No Entries Page":
+        return "No Entries Page"
+    
+
+    data = []
+    
+    for div in divs: 
+        div_name = div[0]
+        entries = get_tourn_entries(div[1])
+        results_page_link = get_results_page(soup)
+        if results_page_link == "":
+            continue
+        div_round_links = get_round_links(results_page_link,div_name)
+        for prelim_link in div_round_links[0]: 
+            rdata = parse_round_data(prelim_link,entries,tourn_date,tourn_name,div_name)
+            if type(rdata) is not list:
+                continue
+            data = data + rdata
+        for elim_link in div_round_links[1]: 
+            rdata = parse_round_data(elim_link,entries,tourn_date,tourn_name,div_name)
+            if type(rdata) is not list:
+                continue
+            data = data + rdata
+            
+            
+    ##save each csv as you go along, so if there's an error midway through you don't have to restart the entire process
+    save_csv(data,file_name,["tournament",
+                             "date",
+                             "division",
+                             "round_number",
+                             "t1_code",
+                             "t1_school",
+                             "p11_name",
+                             "p11_prior_rounds",
+                             "p12_name", 
+                             "p12_prior_rounds",
+                             "t1_ballots",
+                             "t2_code",
+                             "t2_school",
+                             "p21_name",
+                             "p21_prior_rounds",
+                             "p22_name",
+                             "p22_prior_rounds",
+                             "t2_ballots",
+                             "judge_name"])
+                
+    return data
+##this will automatically open a selenium window 
+from webdriver_manager.chrome import ChromeDriverManager
+driver = webdriver.Chrome(service=Service(ChromeDriverManager().install()))
+##iterate through a csv file of tournaments and compile data from them 
+def compile_results(tournaments_csv):
+    data = []
+    for row in tournaments_csv : 
+        print("torun_link:",row[4])
+        tourn_data = scrape_tourn_results(row[4],row[2])
+        if tourn_data == "No Entries Page": 
+            continue
+        else:
+            data.append(tourn_data)
+    return data
+tournaments_csv = open_csv("path_to_tourn_csv")
+results = compile_results(tournaments_csv)
+GATHER JUDGE DATA
+
+def parse_item(tabby_string):
+    return ' '.join(tabby_string.split())
+def get_first_last(name_string):
+    string = re.split(" ",name_string)
+    j_first = string[0]
+    j_last = ' '.join(string[1:])
+    return [j_first,j_last]
+           
+
+def parse_multi(j_first,j_last,current_tournament,page_soup):
+    ## two cases: 1) the judge has mutliple semi matching name, but only 1 matches exact text 
+    ##2) if test 1 fails, then search through the judges record to find the current tournament the judge is observed at
+    matches = []
+    table_html = page_soup.find('tbody')
+    rows = table_html.find_all('tr')
+    
+    
+    for row in rows:
+        cells = row.find_all('td')
+        
+        
+        first = parse_item(cells[0].text)
+        last = parse_item(cells[1].text)
+
+        
+        if j_first.lower() == first.lower() and j_last.lower() ==last.lower():
+            match = True
+        else:
+            match = False 
+        
+        if match:
+            ##if the names exactly match, then you append the paradigm link to the list of matching paradigms
+            paradigm_link = "https://www.tabroom.com/index/"+cells[3].find('a').get('href')
+            matches.append(paradigm_link)
+            
+            
+    
+    if len(matches) == 1: 
+        ##if there's only one name that matches exactly, that resolves issues with multiple matches 
+        ##and you can return the correct paradigm link
+        return matches[0]
+    
+    elif len(matches) > 1:
+        for url in matches:
+            driver.get(url)
+            judge_soup = BeautifulSoup(driver.page_source)
+            current = parse_item(judge_soup.find('li',class_='tabs selected invert').text)
+            
+            if current == "Paradigm":
+                record_element = driver.find_element(By.ID,'button_record')
+                record_element.click()
+                record_soup = BeautifulSoup(driver.page_source)
+                for cell in record_soup.find_all('a',class_="button leftalign white"):
+                    cell_name = parse_item(cell.text)
+                    if cell_name.lower() == current_tournament.lower(): 
+                        return url
+            elif current == "Record":
+                for cell in judge_soup.find_all('a',class_="button leftalign white"):
+                    cell_name = parse_item(cell.text)
+                    if cell_name.lower() == current_tournament.lower(): 
+                        return url
+                
+    return "none"
+
+def get_judge_paradigm(j_name,current_tournament):
+    driver.get("https://www.tabroom.com/index/paradigm.mhtml")
+    
+    if len(j_name.replace(" ","")) == 0:
+        return ""
+    
+    j_list = []
+    
+    first = driver.find_element(By.NAME,"search_first")
+    last = driver.find_element(By.NAME,"search_last")
+    
+    j_first = get_first_last(j_name)[0]
+    j_last = get_first_last(j_name)[1]
+    
+    if type(j_first) is not str:
+        j_first = ""
+    if type(j_last) is not str:
+        j_last = ""
+        
+
+    first.send_keys(j_first)
+    last.send_keys(j_last)
+    driver.find_element(By.XPATH,"//*[@id='content']/div[3]/div[2]/form/div[3]/input").click()
+     
+    try:
+        soup = BeautifulSoup(driver.page_source)
+        #print(soup)
+    except: 
+        driver.switch_to.alert.accept()
+        soup = BeautifulSoup(driver.page_source)
+    
+    
+    paradigm = ""
+    record = []
+    if soup.find('p',class_='explain centeralign'):
+        #print("no record")
+        return ""
+
+    elif soup.find('table',id='paradigm_search'):
+        judge_paradigm_url = parse_multi(j_first,j_last,current_tournament,soup)
+        if judge_paradigm_url == "none":
+            return ""
+        soup = BeautifulSoup(urlopen(judge_paradigm_url),'lxml')
+        current = parse_item(soup.find('li',class_='tabs selected').text)   
+        if current == "Paradigm":
+            raw_text = soup.find(class_='paradigm ltborderbottom').find_all('p')
+            for up_text in raw_text: 
+                p_text = parse_item(up_text.text)
+                paradigm = paradigm + " " + p_text
+                paradigm = paradigm.replace('\'',"")
+        elif current == "Record":
+            paradigm = ""
+    else:
+        current = parse_item(soup.find('li',class_='tabs selected invert').text)   
+        if current == "Paradigm":
+            raw_text = soup.find(class_='paradigm ltborderbottom').find_all('p')
+            for up_text in raw_text: 
+                p_text = parse_item(up_text.text)
+                paradigm = paradigm + " " + p_text
+                paradigm = paradigm.replace('\'',"")
+        elif current == "Record":
+            paradigm = ""
+    return paradigm
+##gathers paradigms for every judge 
+tourn_csv = open_csv("path_to_tourn_csv")
+covered = []
+j_list = []
+
+for row in tourn_csv:
+    j_name = row[22].lower()
+    if j_name not in covered: 
+        paradigm = get_judge_paradigm(j_name,row[0])
+        j_list.append([j_name,paradigm])
+        covered.append(j_name)
+        
+save_csv(j_list,"j_paradigms",["j_name","paradigm"])
+##open info dicts on gender and schools 
+gender_dict= open_dict("path_to_gender_dict")
+schid_dict = open_dict("path_to_school_id_dict")
+##functions for sorting judges into different classes
+def get_length(paradigm):
+    p_list = re.split(" ",paradigm)
+    length = len(p_list)
+    return length
+
+def get_class(paradigm):
+    paradigm = paradigm.lower()
+    p_len = get_length(paradigm)
+        
+    if len(paradigm.replace(" ","")) == 0: 
+        return 0
+    
+    if p_len <50 and "https://www.tabroom.com/index/paradigm.mhtml?" in paradigm:
+        return "handsort"
+    
+        
+    if p_len > 800:
+        return 2
+            
+        
+    if "i am a parent" in paradigm or " lay judge" in paradigm or "parent judge" in paradigm: 
+        return 0
+
+    else: 
+        lay_words = [" lay ", 
+                     " parent", 
+                     " son",
+                     "daughter",
+                     " slowly ",
+                     " truth>tech ",
+                     " truth > tech",
+                    "don't spread",
+                    "volunteer",
+                    "-lay",
+                    "i am new to judging",
+                    "i am a new judge",
+                    " no experience ",
+                    " no debate experience",
+                    "truth>tech",
+                    "truth > tech"]
+        flay_words = ["flay","traditional judge"]
+        tech_words = ["paraphrasing",
+                      "paraphrase",
+                      " rvi ",
+                      " cut cards ",
+                      "tech>truth",
+                      "tech > truth",
+                      " wiki ",
+                      " open source ", 
+                      "competing interps",
+                      " doc ",
+                      " wpm ",
+                      " email chain ",
+                      " toc ",
+                     " sticky ",
+                     " prog ",
+                      "misgender",
+                      "content warning",
+                      "trigger warning",
+                      "saftey",
+                      "speaks",
+                      "disclosure",
+                      "frivioulous theory",
+                      "progressive debate",
+                      " first year out ",
+                      " flow ",
+                      "card",
+                      " blippy ",
+                      " ballot ",
+                      " signposting ",
+                      " signpost"
+                      " defense ",
+                      " speech doc ",
+                      "weighing",
+                      " link ",
+                      " links ",
+                      " weigh",
+                      " ks",
+                      " kritiks ",
+                      " i did policy ",
+                      " i did pf ",
+                      " i debated ",
+                      " qualled ",
+                      "framework",
+                      " 2n ",
+                      " 2nr ",
+                      " 1ac ",
+                      " 2ac ",
+                      " ndt ",
+                      " ceda ",
+                      "tech over truth",
+                      " offense ",
+                      "impact calc",
+                      "national circuit",
+                      " shell ",
+                      " das ",
+                      " da ",
+                      " theory",
+                      "theory "]
+                      
+        have_experience = ["i competed for",
+                           " debated ",
+                           "coached",
+                           "coach for",
+                           "competing",
+                           "competed",
+                
+
+                     ]
+
+        lay_count = 0
+        tech_count = 0 
+        flay_count = 0 
+        experience_count =0
+
+
+        for word in lay_words: 
+            if word in paradigm:
+                lay_count +=1
+        
+        for word in tech_words: 
+            if word in paradigm:
+                tech_count +=1
+        for word in flay_words:
+            if word in paradigm:
+                flay_count +=1 
+        for word in have_experience: 
+            if word in paradigm:
+                experience_count +=1
+        
+        if flay_count > 0 and tech_count <3: 
+            return 1
+           
+        
+        
+        if tech_count > 0 and tech_count < 3 and lay_count == 0: 
+            return 1
+          
+    
+            
+        if tech_count > 3: 
+            return 2
+
+        elif lay_count > 3: 
+            return 0
+        
+
+        elif lay_count > 1 and tech_count == 0:
+            return 0
+        
+        
+        elif lay_count >1 and p_len <75:
+            return 0
+            
+        elif lay_count >0 and flay_count ==0 and tech_count ==0:
+            return 0 
+        
+        elif p_len < 20 and tech_count ==0:
+            return 0
+        
+        elif p_len < 100 and tech_count ==0 and flay_count ==0:
+            return 0
+        else: 
+            return "handsort"
+ 
+  
+def get_judge_class(file_path):
+    judge_csv = mine_csv(file_path)
+    data = []
+    for row in judge_csv:
+        paradigm = row[1]
+        j_class = get_class(paradigm)
+        data.append([row[0],row[1],j_class])
+        
+    return data
+    
+##categorize judges and save results 
+jclass_data = get_judge_class("path_to_judge_paradigms_csv")
+save_csv(jclass_data,"file_name",["j_name","paradigm","class"])
+COMPILE AND PARSE DATA
+
+##this compiles all tournament files together from folder where individual csvs were stored 
+path = "path_to_tournaments_folder"
+files = glob.glob(path + "/*.csv")
+
+data = []
+
+for file in files:
+    tourn_file = open_csv(file)
+    for row in tourn_file: 
+        data.append(row)
+##functions to parse raw results
+def get_div(raw_div):
+    ##standardizes division names
+    raw_div = raw_div.lower()
+    ms = ["mspf",
+         "middle school pf",
+          "ms public forum novice",
+         "ms public forum",
+          "middle school public forum",
+          "ms pf",
+          "ms public forum open",
+          "public forum - middle school",
+         "ms public forum novice (nsda africa urbanization)",
+         "pf ms novice",
+         "pf middle school open",
+         "ms public forum novice (turkey in nato)",
+         "ms public forum open (nsda african urbanization)",
+         "ms public forum open (turkey in nato)",
+         "middle"]
+    jv = ["intermediate public forum",
+               "junior varsity public forum",
+          "junior varsity public forum debate",
+               "jv public forum",
+               "junior varsity pf",
+               "jvpf",
+               "public forum silver",
+                "jpf",
+               "public forum - jv",
+               "jv public forum debate",
+               "jv pf", 
+          "junior varsity public forum",
+          "public forum debate jv",
+               "junior public forum",
+          "public forum - jv",
+          "public forum - rising stars",
+               "jv public forum debate",
+          "jv pf (nsda african urbanization)",
+          "pf jv",
+          "jv pf (turkey in nato)",
+          "jv"
+         ]
+    nov = ["novice public forum",
+           "public forum- novice",
+               "novice pf",
+               "npf",
+               "academy public forum",
+               
+               "novice - public forum",
+               "public forum novice",
+               
+               "novice public forum debate",
+               "public forum-novice",
+            
+               "public forum challenge",
+              
+               "international public forum debate",
+               "public forum debate novice",
+               "novice pf debate",
+               "novice public forum debate",
+               
+               "novice - public forum",
+               "public forum novice",
+               
+              
+               "public forum - novice",
+               "pf novice breakout",
+           "novice pf (nsda africa urbanization)",
+           "pf novice (first year)",
+           "pf novice (previous ms experience)",
+           "novice pf (turkey in nato)",
+           "novice",
+           "es-novice"
+               
+              ]
+    v = ["varsity public forum",
+         "public forum- open",
+        "public forum",
+        "public forum debate",
+        "pfd",
+        "vpf",
+        "opf",
+        "open public forum",
+        "championship public forum",
+        "pf",
+        "public forum gold",
+        "varsity pf",
+        "varsity pf debate",
+        "varsity public forum debate",
+        "public forum open",
+        "public forum - toc",
+        "public forum - open",
+        "public forum - varsity",
+        "pf",
+        "public forum-champ",
+        "open pf",
+        "public forum -open",
+        "international public forum debate",
+        "public forum debate varsity",
+        "varsity pf debate",
+        "open - public forum debate",
+        "championship public forum debate",
+        "open public forum breakout",
+        "varsity pf (nsda african urbanization)",
+        "pf varsity",
+        "varsity pf (turkey in nato)",
+        "open",
+        "champ"]
+    rr = [
+        "pf round robin",
+        "presentation round robin (pf)",
+        "public forum round robin",
+        "pf friday exhibition",
+        "rr"
+    ]
+    if raw_div in v:
+        return "V"
+    elif raw_div in nov:
+        return "N"
+    elif raw_div in jv:
+        return "JV"
+    elif raw_div in ms:
+        return "MS"
+    elif raw_div in rr:
+        return "RR"
+    else: 
+        print("not sorted:",raw_div)
+        #return "Fail"
+
+
+
+def normalize_round(raw_round):
+    ##standardizes prelim round numbers
+    num = ""
+    for char in raw_round:
+        if char.isdigit():
+            num = num + char
+    if num == "":
+        return "elim"
+    else:     
+        return int(num)
+            
+    
+def get_first(string):
+    words = re.split(" ",string)
+    first = words[0]
+    return first
+
+def get_gender(name):
+    first = get_first(name).lower()
+    if first in gender_dict:
+        return gender_dict[first]
+
+    else:
+        return None
+    
+
+def get_xp(prior_rounds):
+    ##weights prior round to determine xp 
+    MS = 0
+    N = 0
+    JV = 0
+    V = 0
+    if prior_rounds == "":
+        return
+    
+    prior_rounds = ast.literal_eval(prior_rounds)
+        
+    for r in prior_rounds:
+        if r[3] == "pre":
+            div = get_div(r[2].lower()) 
+            if div == "MS":
+                MS +=1 
+            elif div == "N":
+                N +=1
+            elif div == "JV":
+                JV +=1 
+            elif div =="V":
+                V +=1
+            
+                
+    return MS*(.45) + N*(.5) + JV*(.75) + V
+
+def get_rtype(row):
+    ##categorizes rounds as elim or prelim 
+    norm = normalize_round(row[3])
+    if norm == "elim":
+        rtype = "elim"
+    else:
+        rtype = "prelim"
+    
+    
+    if len(row[10]) > 0 and len(row[17]) >0:
+        num_ballots = int(row[10]) + int(row[17])
+
+        if num_ballots > 1:
+            rtype = "elim"
+
+
+    if rtype == "elim":
+        return ["elim",row[3]]
+    elif rtype == "prelim":
+        return ["prelim",norm]
+       
+##parses raw data 
+current_id = 0
+j_dict = {}
+incomplete_gdata = 0
+    
+final_data = []
+
+row_num =0
+
+for row in data:
+    row_num+=1 
+    rtype = get_rtype(row)[0]
+    parsed_round_num = get_rtype(row)[1]
+    div = get_div(row[2])
+    
+    p11g = get_gender(row[6])
+    p11_xp = get_xp(row[7])
+    
+    p12g = get_gender(row[8])
+    p12_xp = get_xp(row[9])
+    
+    
+    p21g = get_gender(row[13])
+    p21_xp = get_xp(row[14])
+    
+    
+    p22g = get_gender(row[15])
+    p22_xp = get_xp(row[16])
+    
+    jg = get_gender(row[18])
+    
+    if type(jg) is not int or type(p11g) is not int or type(p12g) is not int or type(p21g) is not int or type(p22g) is not int:
+        incomplete_gdata +=1 
+    
+    
+    if row[18].lower() in j_dict:
+        j_id = j_dict[row[18].lower()] 
+    else:
+        j_id = current_id
+        j_dict[row[18].lower()] = current_id
+        current_id +=1 
+        
+    
+    if row[5] != "":
+        if "/" in row[5]:
+            rev_school = re.split("/",row[5])[1]+ "/" + re.split("/",row[5])[0]
+            try: 
+                s1_id = schid_dict[row[5]]
+            except: 
+                s1_id = schid_dict[rev_school]
+        else:
+            s1_id = schid_dict[row[5]]
+    else: 
+        
+        s1_id = None
+    
+    if row[12] != "":
+        if "/" in row[12]:
+            rev_school = re.split("/",row[12])[1]+ "/" + re.split("/",row[12])[0]
+            try: 
+                s2_id = schid_dict[row[12]]
+            except: 
+                s2_id = schid_dict[rev_school]
+        else:
+            s2_id = schid_dict[row[12]]
+    else:
+        s2_id = None
+    
+    new_row = [row[0],
+               row[1],
+               div,
+               rtype,
+               parsed_round_num,
+               row[5], 
+               s1_id,
+               row[6],
+               p11g,
+               p11_xp,
+               row[8],
+               p12g,
+               p12_xp,
+               row[10],
+               row[12],
+               s2_id,
+               row[13],
+               p21g,
+               p21_xp,
+               row[15],
+               p22g,
+               p22_xp,
+               row[17],
+               row[18],
+               j_id,
+               jg
+              ]
+    final_data.append(new_row)
+
+            
+            
+##add in judge class data 
+j_dict = {}
+j_csv = open_csv("path_to_judge_csv")
+for row in j_csv:
+    if row[0] not in j_dict:
+        j_dict[row[0]] = row[2]
+        
+for row in final_data:
+    j_name = row[23].lower()
+    if j_name == "" or row[3] == "elim" or j_name not in j_dict:
+        continue
+
+    j_class = j_dict[j_name]
+    row.append(j_class)
